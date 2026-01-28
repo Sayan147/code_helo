@@ -11,27 +11,28 @@ def find_function_exemplars(
     code_sections: List[Dict[str, Any]],
     max_exemplars: int = 3,
 ) -> List[Dict[str, Any]]:
-    """
-    Use the existing deep_search utility over flattened code sections
-    to pick 1..N exemplar sections that best match the requirement.
+    """Find exemplar sections from flattened code sections.
 
-    For v1 we simply:
-      - run a single deep_search call
-      - use the chosen section as the primary exemplar
-      - optionally add a couple of neighbors for extra context
+    Always returns at least one exemplar when `code_sections` is non-empty by
+    falling back to the first section if `deep_search` does not provide a
+    usable index.
     """
     if not code_sections:
         return []
 
     result = deep_search(requirement, code_sections)
     if not isinstance(result, dict):
-        logger.warning("deep_search returned non-dict result, ignoring")
-        return []
-
-    idx = result.get("chosen_section_index")
-    if idx is None or not isinstance(idx, int):
-        logger.info("deep_search did not return a valid chosen_section_index")
-        return []
+        logger.warning(
+            "deep_search returned non-dict result; falling back to first section as exemplar"
+        )
+        idx = 0
+    else:
+        idx = result.get("chosen_section_index")
+        if idx is None or not isinstance(idx, int) or not (0 <= idx < len(code_sections)):
+            logger.info(
+                "deep_search did not return a valid chosen_section_index; using first section as exemplar"
+            )
+            idx = 0
 
     exemplars: List[Dict[str, Any]] = []
 
