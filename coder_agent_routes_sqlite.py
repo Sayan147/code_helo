@@ -5,10 +5,12 @@ Aligned with brd_generation_routes_sqlite.py patterns.
 """
 
 import logging
+import os
+import tempfile
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.configs.sqlite_config import SQLiteDatabase
@@ -32,6 +34,7 @@ async def generate_code(
     requirements: str = Form(..., description="Natural language requirements for the code to be generated"),
     project_type: str = Form(..., description="High-level project type (etl, regression, classification, fastapi, etc.)"),
     session_id: Optional[str] = Form(None, description="Optional session ID for conversation memory"),
+    files: Optional[List[UploadFile]] = File(None, description="Optional supporting files (code, docs, etc.) to include in code generation"),
     db: Session = Depends(SQLiteDatabase.get_db),
 ):
     """
@@ -40,13 +43,14 @@ async def generate_code(
     Flow (aligned with brd_generation_routes_sqlite.py):
       1) If session_id provided, retrieve conversation history for context
       2) Save user query to memory if session_id provided
-      3) Load project KB from local filesystem (project_json directory)
-      4) Navigator agent creates a simple generation plan
-      5) Context agent loads KB, tribal KB, and conversation history
-      6) Search agent finds function exemplars from the KB
-      7) Code agent generates code and runs a light validation pass
-      8) Save generated code to memory if session_id provided
-      9) Return generated code + metadata
+      3) Process uploaded files (if any) and extract text content
+      4) Load project KB from local filesystem (project_json directory)
+      5) Navigator agent creates a simple generation plan
+      6) Context agent loads KB, tribal KB, and conversation history
+      7) Search agent finds function exemplars from the KB
+      8) Code agent generates code with uploaded files context and runs validation
+      9) Save generated code to memory if session_id provided
+      10) Return generated code + metadata
     """
     # Handle memory/session if provided
     conversation_history = None
@@ -66,6 +70,45 @@ async def generate_code(
                 history_parts.append(f"{role.capitalize()}: {content}")
             conversation_history = "\n".join(history_parts)
             logger.info(f"Retrieved {len(history)} messages from session {session_id}")
+
+    # Process uploaded files (if any)
+    uploaded_files_content: List[str] = []
+    if files:
+        from app.utils.preprocessing import extract_from_path, preprocess_text_to_markdown
+        
+        for upload in files:
+            if upload is None:
+                continue
+            try:
+                file_bytes = await upload.read()
+                if not file_bytes:
+                    continue
+                suffix = os.path.splitext(upload.filename or "")[1]
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                    tmp_file.write(file_bytes)
+                    tmp_path = tmp_file.name
+
+                try:
+                    extracted_text, _ = extract_from_path(tmp_path)
+                    markdown_text = preprocess_text_to_markdown(
+                        extracted_text,
+                        source_path=tmp_path,
+                    )
+                    # Limit extremely long inputs to keep prompt manageable
+                    trimmed_markdown = markdown_text[:20000]
+                    uploaded_files_content.append(
+                        f"# Uploaded File: {upload.filename}\n{trimmed_markdown}"
+                    )
+                    logger.info(f"Processed uploaded file: {upload.filename}")
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+            except Exception as exc:
+                logger.warning(f"Failed to process uploaded file {upload.filename}: {exc}")
+            finally:
+                await upload.close()
+
+    uploaded_files_text = "\n\n".join(uploaded_files_content) if uploaded_files_content else ""
 
     try:
         # Load project JSON from local filesystem (same pattern as BRD SQLite routes)
@@ -98,13 +141,14 @@ async def generate_code(
             max_exemplars=3,
         )
 
-        # 7. Code generation + validation
+        # 7. Code generation + validation (include uploaded files context)
         raw_code = generate_code_with_exemplars(
             requirement=requirements,
             project_type=project_type,
             exemplars=exemplars,
             tribal_kb=context["tribal_kb"],
             conversation_history=context.get("conversation_history", ""),
+            uploaded_files=uploaded_files_text,
         )
 
         is_valid, validation_details = validate_generated_code(
