@@ -34,7 +34,10 @@ async def generate_code(
     requirements: str = Form(..., description="Natural language requirements for the code to be generated"),
     project_type: str = Form(..., description="High-level project type (etl, regression, classification, fastapi, etc.)"),
     session_id: Optional[str] = Form(None, description="Optional session ID for conversation memory"),
-    files: Optional[List[UploadFile]] = File(None, description="Optional supporting files (code, docs, etc.) to include in code generation"),
+    files: Optional[List[UploadFile]] = File(
+        None,
+        description="Optional supporting files (code, docs, etc.) to include in code generation",
+    ),
     db: Session = Depends(SQLiteDatabase.get_db),
 ):
     """
@@ -43,12 +46,12 @@ async def generate_code(
     Flow (aligned with brd_generation_routes_sqlite.py):
       1) If session_id provided, retrieve conversation history for context
       2) Save user query to memory if session_id provided
-      3) Process uploaded files (if any) and extract text content
+      3) Optionally process uploaded files and include their content as context
       4) Load project KB from local filesystem (project_json directory)
       5) Navigator agent creates a simple generation plan
       6) Context agent loads KB, tribal KB, and conversation history
       7) Search agent finds function exemplars from the KB
-      8) Code agent generates code with uploaded files context and runs validation
+      8) Code agent generates code (using exemplars + tribal KB + uploaded files) and runs validation
       9) Save generated code to memory if session_id provided
       10) Return generated code + metadata
     """
@@ -75,7 +78,7 @@ async def generate_code(
     uploaded_files_content: List[str] = []
     if files:
         from app.utils.preprocessing import extract_from_path, preprocess_text_to_markdown
-        
+
         for upload in files:
             if upload is None:
                 continue
@@ -99,12 +102,12 @@ async def generate_code(
                     uploaded_files_content.append(
                         f"# Uploaded File: {upload.filename}\n{trimmed_markdown}"
                     )
-                    logger.info(f"Processed uploaded file: {upload.filename}")
+                    logger.info("Processed uploaded file: %s", upload.filename)
                 finally:
                     if os.path.exists(tmp_path):
                         os.remove(tmp_path)
             except Exception as exc:
-                logger.warning(f"Failed to process uploaded file {upload.filename}: {exc}")
+                logger.warning("Failed to process uploaded file %s: %s", upload.filename, exc)
             finally:
                 await upload.close()
 
@@ -113,7 +116,7 @@ async def generate_code(
     try:
         # Load project JSON from local filesystem (same pattern as BRD SQLite routes)
         from app.utils.knowbase_basic import find_project_by_name
-        
+
         project = find_project_by_name(project_name, projects_directory="project_json")
         if project is None:
             raise HTTPException(
@@ -141,7 +144,7 @@ async def generate_code(
             max_exemplars=3,
         )
 
-        # 7. Code generation + validation (include uploaded files context)
+        # 7. Code generation + validation
         raw_code = generate_code_with_exemplars(
             requirement=requirements,
             project_type=project_type,
