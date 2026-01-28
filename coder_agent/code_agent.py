@@ -39,10 +39,19 @@ def generate_code_with_exemplars(
     exemplars: List[Dict[str, Any]],
     tribal_kb: Dict[str, Any],
     conversation_history: str = "",
+    uploaded_files: str = "",
 ) -> str:
     """
     Core generation helper: builds a rich prompt with exemplars + tribal KB
     and returns a raw code string from the LLM.
+    
+    Args:
+        requirement: User's code generation requirements
+        project_type: Project type (etl, regression, etc.)
+        exemplars: List of function exemplars from KB
+        tribal_kb: Tribal knowledge dictionary
+        conversation_history: Optional conversation history
+        uploaded_files: Optional uploaded files content (extracted text)
     """
     exemplars_text = _format_exemplars(exemplars)
     tribal_summary = _summarize_tribal_kb(tribal_kb)
@@ -63,6 +72,15 @@ def generate_code_with_exemplars(
         tribal_summary,
     ]
 
+    if uploaded_files:
+        prompt_parts.extend(
+            [
+                "",
+                "UPLOADED FILES (user-provided reference material):",
+                uploaded_files,
+            ]
+        )
+
     if conversation_history:
         prompt_parts.extend(
             [
@@ -79,6 +97,7 @@ def generate_code_with_exemplars(
             "- Return ONLY code and minimal inline comments, no prose explanation.",
             "- Prefer clear function and module boundaries.",
             "- Follow clean-code best practices for this project_type.",
+            "- If uploaded files are provided, use them as reference for structure, patterns, or requirements.",
         ]
     )
 
