@@ -41,17 +41,11 @@ def generate_code_with_exemplars(
     conversation_history: str = "",
     uploaded_files: str = "",
 ) -> str:
-    """
-    Core generation helper: builds a rich prompt with exemplars + tribal KB
-    and returns a raw code string from the LLM.
-    
-    Args:
-        requirement: User's code generation requirements
-        project_type: Project type (etl, regression, etc.)
-        exemplars: List of function exemplars from KB
-        tribal_kb: Tribal knowledge dictionary
-        conversation_history: Optional conversation history
-        uploaded_files: Optional uploaded files content (extracted text)
+    """Core generation helper for coder agent.
+
+    Builds a rich prompt with exemplars, tribal KB and optional uploaded file
+    context and returns a raw code string from the LLM. Always returns a
+    string (empty if LLM returns nothing) so downstream steps can proceed.
     """
     exemplars_text = _format_exemplars(exemplars)
     tribal_summary = _summarize_tribal_kb(tribal_kb)
@@ -76,7 +70,7 @@ def generate_code_with_exemplars(
         prompt_parts.extend(
             [
                 "",
-                "UPLOADED FILES (user-provided reference material):",
+                "UPLOADED FILES CONTEXT (treat as additional authoritative reference when relevant):",
                 uploaded_files,
             ]
         )
@@ -97,17 +91,17 @@ def generate_code_with_exemplars(
             "- Return ONLY code and minimal inline comments, no prose explanation.",
             "- Prefer clear function and module boundaries.",
             "- Follow clean-code best practices for this project_type.",
-            "- If uploaded files are provided, use them as reference for structure, patterns, or requirements.",
         ]
     )
 
     prompt = "\n".join(prompt_parts)
 
     try:
-        return call_llm(prompt) or ""
+        response = call_llm(prompt)
+        return response or ""
     except Exception as exc:  # pragma: no cover - defensive
         logger.error("Code generation LLM call failed: %s", exc)
-        raise
+        return ""
 
 
 def validate_generated_code(
